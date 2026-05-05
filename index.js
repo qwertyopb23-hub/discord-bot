@@ -4,82 +4,99 @@ const {
   Client,
   GatewayIntentBits,
   Events,
-  Collection,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  ChannelType,
+  PermissionFlagsBits,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
-  PermissionFlagsBits
 } = require("discord.js");
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-});
+console.log("🚀 Bot starting...");
 
-client.commands = new Collection();
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
 
 // ================= COMMANDS =================
 
-client.commands.set("ping", {
-  execute: async (interaction) => {
-    await interaction.reply("🏓 Pong!");
-  },
-});
+const commands = [
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
 
-client.commands.set("panel", {
-  execute: async (interaction) => {
-    await interaction.reply({
-      content: "🎛️ Control Panel:\n/ping\n/panel\n/ticket",
-      ephemeral: true
-    });
-  },
-});
+  new SlashCommandBuilder()
+    .setName("panel")
+    .setDescription("Shows control panel"),
 
-client.commands.set("ticket", {
-  execute: async (interaction) => {
+  new SlashCommandBuilder()
+    .setName("ticket")
+    .setDescription("Open ticket panel"),
+].map(cmd => cmd.toJSON());
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("create_ticket")
-        .setLabel("🎫 Create Ticket")
-        .setStyle(ButtonStyle.Primary)
+// ================= REGISTER COMMANDS =================
+
+async function registerCommands() {
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+  try {
+    console.log("⏳ Registering slash commands...");
+
+    await rest.put(
+      Routes.applicationCommands(process.env.CLIENT_ID),
+      { body: commands }
     );
 
-    await interaction.reply({
-      content: "🎫 Click below to create a support ticket",
-      components: [row]
-    });
+    console.log("✅ Slash commands registered!");
+  } catch (err) {
+    console.error("❌ Command registration failed:", err);
   }
-});
+}
 
 // ================= READY =================
 
-client.once("ready", () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
+client.once(Events.ClientReady, async (c) => {
+  console.log(`🤖 Logged in as ${c.user.tag}`);
+  await registerCommands();
 });
 
 // ================= INTERACTIONS =================
 
 client.on(Events.InteractionCreate, async (interaction) => {
 
-  // Slash Commands
+  // SLASH COMMANDS
   if (interaction.isChatInputCommand()) {
-    const command = client.commands.get(interaction.commandName);
-    if (!command) return;
 
-    try {
-      await command.execute(interaction);
-    } catch (error) {
-      console.error(error);
-      await interaction.reply({ content: "❌ Error executing command", ephemeral: true });
+    if (interaction.commandName === "ping") {
+      return interaction.reply("🏓 Pong!");
+    }
+
+    if (interaction.commandName === "panel") {
+      return interaction.reply({
+        content: "🎛️ Control Panel:\n/ping\n/panel\n/ticket",
+        ephemeral: true,
+      });
+    }
+
+    if (interaction.commandName === "ticket") {
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("create_ticket")
+          .setLabel("🎫 Create Ticket")
+          .setStyle(ButtonStyle.Primary)
+      );
+
+      return interaction.reply({
+        content: "Click below to create a support ticket:",
+        components: [row],
+      });
     }
   }
 
-  // Buttons
+  // BUTTONS
   if (interaction.isButton()) {
 
     if (interaction.customId === "create_ticket") {
@@ -94,17 +111,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
           },
           {
             id: interaction.user.id,
-            allow: [PermissionFlagsBits.ViewChannel],
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
           },
         ],
       });
 
       await interaction.reply({
         content: `✅ Ticket created: ${channel}`,
-        ephemeral: true
+        ephemeral: true,
       });
 
-      await channel.send(`🎫 Welcome ${interaction.user}, support will be with you shortly.`);
+      await channel.send(`🎫 Hello ${interaction.user}, support will assist you shortly.`);
     }
   }
 });
