@@ -1,293 +1,509 @@
-require("dotenv").config();
-const fs = require("fs");
-
 const {
   Client,
   GatewayIntentBits,
-  Events,
-  REST,
-  Routes,
-  SlashCommandBuilder,
+  PermissionsBitField,
   ChannelType,
-  PermissionFlagsBits,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  Events,
+  ActivityType
 } = require("discord.js");
 
-process.on("unhandledRejection", (err) => {
-  console.log("⚠️ Error:", err);
-});
-
-console.log("🚀 Final Bot Starting...");
+require("dotenv").config();
 
 // ================= CLIENT =================
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-  ],
+    GatewayIntentBits.GuildMembers
+  ]
 });
 
-// ================= MEMORY =================
-const ticketActivity = new Map();
+// ================= CONFIG =================
 
-// ================= COMMANDS =================
+const CATEGORY_ID = "PUT_CATEGORY_ID";
+const STAFF_ROLE_ID = "PUT_STAFF_ROLE_ID";
+const LOG_CHANNEL_ID = "PUT_LOG_CHANNEL_ID";
+
+// ================= SLASH COMMANDS =================
+
 const commands = [
 
-  // BASIC
-  new SlashCommandBuilder().setName("ping").setDescription("Check bot"),
-  new SlashCommandBuilder().setName("panel").setDescription("Control panel"),
-  new SlashCommandBuilder().setName("ticket").setDescription("Open ticket system"),
+  // PANEL
+  new SlashCommandBuilder()
+    .setName("panel")
+    .setDescription("Send ticket panel"),
 
-  // MODERATION
+  // PING
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Check bot latency"),
+
+  // SAY
+  new SlashCommandBuilder()
+    .setName("say")
+    .setDescription("Make bot say something")
+    .addStringOption(option =>
+      option.setName("message")
+        .setDescription("Message")
+        .setRequired(true)
+    ),
+
+  // KICK
   new SlashCommandBuilder()
     .setName("kick")
-    .setDescription("Kick a user")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
+    .setDescription("Kick a member")
+    .addUserOption(option =>
+      option.setName("user")
+        .setDescription("User")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName("reason")
+        .setDescription("Reason")
+    ),
 
+  // BAN
   new SlashCommandBuilder()
     .setName("ban")
-    .setDescription("Ban a user")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
+    .setDescription("Ban a member")
+    .addUserOption(option =>
+      option.setName("user")
+        .setDescription("User")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName("reason")
+        .setDescription("Reason")
+    ),
 
-  new SlashCommandBuilder()
-    .setName("timeout")
-    .setDescription("Timeout user (10 min)")
-    .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
-
+  // CLEAR
   new SlashCommandBuilder()
     .setName("clear")
     .setDescription("Delete messages")
-    .addIntegerOption(o =>
-      o.setName("amount").setDescription("Number").setRequired(true)
+    .addIntegerOption(option =>
+      option.setName("amount")
+        .setDescription("1-100")
+        .setRequired(true)
     ),
 
-].map(c => c.toJSON());
+  // LOCK
+  new SlashCommandBuilder()
+    .setName("lock")
+    .setDescription("Lock channel"),
 
-// ================= REGISTER COMMANDS =================
-async function registerCommands() {
-  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+  // UNLOCK
+  new SlashCommandBuilder()
+    .setName("unlock")
+    .setDescription("Unlock channel"),
 
-  await rest.put(
-    Routes.applicationCommands(process.env.CLIENT_ID),
-    { body: commands }
-  );
-
-  console.log("✅ Commands registered");
-}
+].map(cmd => cmd.toJSON());
 
 // ================= READY =================
-client.once(Events.ClientReady, async (c) => {
-  console.log(`🤖 Logged in as ${c.user.tag}`);
-  await registerCommands();
+
+client.once("ready", async () => {
+
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+  try {
+
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+
+    console.log("✅ Slash commands loaded");
+
+  } catch (err) {
+    console.log(err);
+  }
+
+  client.user.setPresence({
+    activities: [
+      {
+        name: "Pro Ticket System",
+        type: ActivityType.Watching
+      }
+    ],
+    status: "online"
+  });
+
 });
 
 // ================= WELCOME SYSTEM =================
-client.on(Events.GuildMemberAdd, async (member) => {
+
+client.on(Events.GuildMemberAdd, async member => {
+
   const channel = member.guild.systemChannel;
 
   if (!channel) return;
 
   const embed = new EmbedBuilder()
-    .setTitle("👋 Welcome!")
-    .setDescription(`Welcome ${member.user.tag} to **${member.guild.name}**`)
-    .setColor(0x00ff99);
+    .setTitle("👋 Welcome")
+    .setDescription(`Welcome ${member} to **${member.guild.name}**`)
+    .setThumbnail(member.user.displayAvatarURL())
+    .setColor("Green")
+    .setTimestamp();
 
   channel.send({ embeds: [embed] });
+
 });
 
-// ================= TICKET TRANSCRIPT =================
-async function createTranscript(channel) {
-  const messages = await channel.messages.fetch({ limit: 50 });
+// ================= INTERACTION SYSTEM =================
 
-  let log = `Transcript: ${channel.name}\n\n`;
+client.on(Events.InteractionCreate, async interaction => {
 
-  messages.reverse().forEach(m => {
-    log += `${m.author.tag}: ${m.content}\n`;
-  });
+  // ================= COMMANDS =================
 
-  const file = `transcript-${channel.id}.txt`;
-  fs.writeFileSync(file, log);
+  if (interaction.isChatInputCommand()) {
 
-  return file;
-}
+    // ================= PANEL =================
 
-// ================= INTERACTIONS =================
-client.on(Events.InteractionCreate, async (interaction) => {
+    if (interaction.commandName === "panel") {
 
-  if (!interaction.isChatInputCommand()) return;
+      const embed = new EmbedBuilder()
+        .setTitle("🎫 Support Center")
+        .setDescription(
+          "Need help?\n\nClick the button below to create a support ticket."
+        )
+        .setColor("Blue")
+        .setFooter({
+          text: interaction.guild.name
+        });
 
-  const { commandName } = interaction;
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("create_ticket")
+          .setLabel("Create Ticket")
+          .setEmoji("🎫")
+          .setStyle(ButtonStyle.Primary)
+      );
 
-  // ================= BASIC =================
-  if (commandName === "ping") {
-    return interaction.reply("🏓 Pong!");
-  }
-
-  if (commandName === "panel") {
-    return interaction.reply({
-      content:
-        "⚙️ **Bot Panel**\n\n" +
-        "🛡 Moderation enabled\n" +
-        "🎫 Ticket system active\n" +
-        "👋 Welcome system active",
-      ephemeral: true,
-    });
-  }
-
-  if (commandName === "ticket") {
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("ticket_create")
-        .setLabel("🎫 Create Ticket")
-        .setStyle(ButtonStyle.Primary)
-    );
-
-    return interaction.reply({
-      content: "Click below to open a ticket:",
-      components: [row],
-    });
-  }
-
-  // ================= MODERATION =================
-  if (commandName === "kick") {
-    const user = interaction.options.getUser("user");
-    const member = await interaction.guild.members.fetch(user.id);
-
-    await member.kick();
-    return interaction.reply(`👢 Kicked ${user.tag}`);
-  }
-
-  if (commandName === "ban") {
-    const user = interaction.options.getUser("user");
-    const member = await interaction.guild.members.fetch(user.id);
-
-    await member.ban();
-    return interaction.reply(`🔨 Banned ${user.tag}`);
-  }
-
-  if (commandName === "timeout") {
-    const user = interaction.options.getUser("user");
-    const member = await interaction.guild.members.fetch(user.id);
-
-    await member.timeout(10 * 60 * 1000);
-    return interaction.reply(`⏳ Timed out ${user.tag}`);
-  }
-
-  if (commandName === "clear") {
-    const amount = interaction.options.getInteger("amount");
-
-    const msgs = await interaction.channel.bulkDelete(amount, true);
-    return interaction.reply({
-      content: `🧹 Deleted ${msgs.size} messages`,
-      ephemeral: true,
-    });
-  }
-});
-
-// ================= BUTTON SYSTEM =================
-client.on(Events.InteractionCreate, async (interaction) => {
-
-  if (!interaction.isButton()) return;
-
-  // ===== CREATE TICKET =====
-  if (interaction.customId === "ticket_create") {
-
-    const channel = await interaction.guild.channels.create({
-      name: `ticket-${interaction.user.username}`,
-      type: ChannelType.GuildText,
-      permissionOverwrites: [
-        {
-          id: interaction.guild.id,
-          deny: [PermissionFlagsBits.ViewChannel],
-        },
-        {
-          id: interaction.user.id,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-          ],
-        },
-        {
-          id: client.user.id,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ManageChannels,
-          ],
-        },
-      ],
-    });
-
-    ticketActivity.set(channel.id, Date.now());
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("close_ticket")
-        .setLabel("🔒 Close Ticket")
-        .setStyle(ButtonStyle.Danger)
-    );
-
-    const embed = new EmbedBuilder()
-      .setTitle("🎫 Ticket Opened")
-      .setDescription(`Hello ${interaction.user}, explain your issue.`)
-      .setColor(0x00ffcc);
-
-    await interaction.reply({
-      content: `Ticket created: ${channel}`,
-      ephemeral: true,
-    });
-
-    await channel.send({ embeds: [embed], components: [row] });
-  }
-
-  // ===== CLOSE TICKET =====
-  if (interaction.customId === "close_ticket") {
-
-    await interaction.reply("🔒 Closing ticket...");
-
-    const file = await createTranscript(interaction.channel);
-
-    try {
-      await interaction.user.send({
-        content: "📄 Transcript:",
-        files: [file],
+      return interaction.reply({
+        embeds: [embed],
+        components: [row]
       });
-    } catch {}
+    }
 
-    setTimeout(() => {
-      interaction.channel.delete().catch(() => {});
-    }, 4000);
+    // ================= PING =================
+
+    if (interaction.commandName === "ping") {
+
+      return interaction.reply(
+        `🏓 Pong: ${client.ws.ping}ms`
+      );
+    }
+
+    // ================= SAY =================
+
+    if (interaction.commandName === "say") {
+
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return interaction.reply({
+          content: "❌ No permission",
+          ephemeral: true
+        });
+      }
+
+      const msg = interaction.options.getString("message");
+
+      await interaction.channel.send(msg);
+
+      return interaction.reply({
+        content: "✅ Sent",
+        ephemeral: true
+      });
+    }
+
+    // ================= CLEAR =================
+
+    if (interaction.commandName === "clear") {
+
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return interaction.reply({
+          content: "❌ No permission",
+          ephemeral: true
+        });
+      }
+
+      const amount = interaction.options.getInteger("amount");
+
+      if (amount < 1 || amount > 100) {
+        return interaction.reply({
+          content: "❌ Choose 1-100",
+          ephemeral: true
+        });
+      }
+
+      await interaction.channel.bulkDelete(amount, true);
+
+      return interaction.reply({
+        content: `✅ Deleted ${amount} messages`,
+        ephemeral: true
+      });
+    }
+
+    // ================= KICK =================
+
+    if (interaction.commandName === "kick") {
+
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
+        return interaction.reply({
+          content: "❌ No permission",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+      const reason = interaction.options.getString("reason") || "No reason";
+
+      const member = interaction.guild.members.cache.get(user.id);
+
+      if (!member) {
+        return interaction.reply("❌ User not found");
+      }
+
+      await member.kick(reason);
+
+      return interaction.reply(
+        `✅ Kicked ${user.tag}\nReason: ${reason}`
+      );
+    }
+
+    // ================= BAN =================
+
+    if (interaction.commandName === "ban") {
+
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+        return interaction.reply({
+          content: "❌ No permission",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+      const reason = interaction.options.getString("reason") || "No reason";
+
+      const member = interaction.guild.members.cache.get(user.id);
+
+      if (!member) {
+        return interaction.reply("❌ User not found");
+      }
+
+      await member.ban({ reason });
+
+      return interaction.reply(
+        `✅ Banned ${user.tag}\nReason: ${reason}`
+      );
+    }
+
+    // ================= LOCK =================
+
+    if (interaction.commandName === "lock") {
+
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        return interaction.reply({
+          content: "❌ No permission",
+          ephemeral: true
+        });
+      }
+
+      await interaction.channel.permissionOverwrites.edit(
+        interaction.guild.id,
+        {
+          SendMessages: false
+        }
+      );
+
+      return interaction.reply("🔒 Channel locked");
+    }
+
+    // ================= UNLOCK =================
+
+    if (interaction.commandName === "unlock") {
+
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        return interaction.reply({
+          content: "❌ No permission",
+          ephemeral: true
+        });
+      }
+
+      await interaction.channel.permissionOverwrites.edit(
+        interaction.guild.id,
+        {
+          SendMessages: true
+        }
+      );
+
+      return interaction.reply("🔓 Channel unlocked");
+    }
+
   }
+
+  // ================= BUTTON SYSTEM =================
+
+  if (interaction.isButton()) {
+
+    // ================= CREATE TICKET =================
+
+    if (interaction.customId === "create_ticket") {
+
+      const existing = interaction.guild.channels.cache.find(
+        c => c.name === `ticket-${interaction.user.username.toLowerCase()}`
+      );
+
+      if (existing) {
+        return interaction.reply({
+          content: `❌ You already have a ticket: ${existing}`,
+          ephemeral: true
+        });
+      }
+
+      const channel = await interaction.guild.channels.create({
+        name: `ticket-${interaction.user.username}`,
+        type: ChannelType.GuildText,
+        parent: CATEGORY_ID,
+
+        permissionOverwrites: [
+
+          {
+            id: interaction.guild.id,
+            deny: [
+              PermissionsBitField.Flags.ViewChannel
+            ]
+          },
+
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.ReadMessageHistory,
+              PermissionsBitField.Flags.AttachFiles
+            ]
+          },
+
+          {
+            id: STAFF_ROLE_ID,
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.ReadMessageHistory
+            ]
+          }
+
+        ]
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle("🎫 Ticket Opened")
+        .setDescription(
+          "Support will assist you shortly.\nPress the button below to close this ticket."
+        )
+        .setColor("Green")
+        .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("close_ticket")
+          .setLabel("Close Ticket")
+          .setEmoji("🔒")
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await channel.send({
+        content: `${interaction.user} <@&${STAFF_ROLE_ID}>`,
+        embeds: [embed],
+        components: [row]
+      });
+
+      const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
+
+      if (logChannel) {
+        logChannel.send(
+          `📁 Ticket created by ${interaction.user.tag}`
+        );
+      }
+
+      return interaction.reply({
+        content: `✅ Ticket created: ${channel}`,
+        ephemeral: true
+      });
+    }
+
+    // ================= CLOSE TICKET =================
+
+    if (interaction.customId === "close_ticket") {
+
+      await interaction.reply(
+        "🗑️ Ticket closing in 5 seconds..."
+      );
+
+      const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
+
+      if (logChannel) {
+        logChannel.send(
+          `❌ Ticket closed by ${interaction.user.tag}`
+        );
+      }
+
+      setTimeout(() => {
+        interaction.channel.delete().catch(console.error);
+      }, 5000);
+    }
+
+  }
+
 });
 
-// ================= MESSAGE INTERACTIONS =================
-client.on("messageCreate", async (message) => {
+// ================= AUTO MODERATION =================
 
-  if (!message.channel.name?.startsWith("ticket-")) return;
+client.on("messageCreate", async message => {
+
   if (message.author.bot) return;
 
-  const msg = message.content.toLowerCase();
+  const badWords = [
+    "badword1",
+    "badword2"
+  ];
 
-  // simple interaction system
-  if (msg.includes("hello") || msg.includes("hi")) {
-    return message.reply("👋 Hello! How can I help you?");
+  if (
+    badWords.some(word =>
+      message.content.toLowerCase().includes(word)
+    )
+  ) {
+
+    await message.delete();
+
+    message.channel.send(
+      `⚠️ ${message.author}, watch your language`
+    );
+
   }
 
-  if (msg.includes("help")) {
-    return message.reply("🛠 Tell me your issue and I’ll assist you.");
-  }
+});
 
-  if (msg.includes("slow")) {
-    return message.reply("⚡ I’ll try to speed things up for you.");
-  }
+// ================= ERROR HANDLER =================
+
+process.on("unhandledRejection", error => {
+  console.log(error);
+});
+
+process.on("uncaughtException", error => {
+  console.log(error);
 });
 
 // ================= LOGIN =================
+
 client.login(process.env.TOKEN);
